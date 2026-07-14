@@ -1,0 +1,16 @@
+============================================================
+INFORME DE AUDITORÍA - SIVAA
+============================================================
+Asignatura: IT Applied to Marketing
+Curso: 1BDMB
+Total de alumnos detectados: 28
+
+------------------------------------------------------------
+1. PONDERACIONES (acta vs excel maestro)
+------------------------------------------------------------
+✅ Las ponderaciones del acta coinciden con el excel maestro.
+
+------------------------------------------------------------
+2. NOTAS FINALES
+------------------------------------------------------------
+✅ Todas las notas comprobables coinciden con el cálculo de SIVAA.

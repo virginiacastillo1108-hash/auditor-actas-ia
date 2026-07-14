@@ -1,0 +1,61 @@
+/* Fondo general */
+.stApp {
+    background-color: #f4f7fb;
+}
+
+/* Contenedor principal */
+.block-container {
+    padding-top: 1rem;
+    padding-left: 2rem;
+    padding-right: 2rem;
+}
+
+/* Cabecera */
+.header {
+    background: linear-gradient(90deg,#005BAC,#009FE3);
+    padding: 18px;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    color: white;
+}
+
+.header h1{
+    margin:0;
+    font-size:34px;
+}
+
+.header h3{
+    margin:0;
+    font-weight:400;
+}
+
+/* Tarjetas */
+.card{
+    background:white;
+    padding:25px;
+    border-radius:15px;
+    box-shadow:0 3px 12px rgba(0,0,0,.08);
+}
+
+/* Menú */
+.menu{
+    background:white;
+    border-radius:15px;
+    padding:15px;
+    box-shadow:0 3px 12px rgba(0,0,0,.08);
+}
+
+/* Botones */
+.stButton>button{
+    width:100%;
+    border-radius:10px;
+    height:50px;
+    font-size:17px;
+    font-weight:600;
+    border:none;
+}
+
+.stButton>button:hover{
+    background:#005BAC;
+    color:white;
+}
