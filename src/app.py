@@ -15,10 +15,14 @@ def auditar_acta(ruta_acta, ruta_maestro):
     texto del informe generado.
     """
 
-    if not os.path.exists(ruta_acta):
+    # Cuando se llama desde la web, ruta_acta/ruta_maestro pueden ser
+    # archivos subidos (objetos en memoria) en vez de rutas de texto.
+    # La comprobación de "existe el archivo" solo tiene sentido si es
+    # una ruta de texto (uso por terminal).
+    if isinstance(ruta_acta, str) and not os.path.exists(ruta_acta):
         raise FileNotFoundError(f"No se encuentra el archivo del acta: {ruta_acta}")
 
-    if not os.path.exists(ruta_maestro):
+    if isinstance(ruta_maestro, str) and not os.path.exists(ruta_maestro):
         raise FileNotFoundError(f"No se encuentra el excel maestro: {ruta_maestro}")
 
     # 1. Leer el acta
@@ -61,7 +65,7 @@ def auditar_acta(ruta_acta, ruta_maestro):
         no_evaluables=no_evaluables,
     )
 
-    return informe, asignatura
+    return informe, asignatura, curso, len(alumnos)
 
 
 def main():
@@ -92,7 +96,7 @@ def main():
     print("=================================\n")
 
     try:
-        informe, asignatura = auditar_acta(args.acta, args.maestro)
+        informe, asignatura, curso, total_alumnos = auditar_acta(args.acta, args.maestro)
     except (FileNotFoundError, ValueError) as error:
         print(f"❌ {error}")
         sys.exit(1)
