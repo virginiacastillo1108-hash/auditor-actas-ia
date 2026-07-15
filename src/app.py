@@ -13,13 +13,16 @@ from auditor import (
     _porcentaje,
 )
 from informe import generar_informe, guardar_informe
+from correo import generar_correo_profesor
 from config import EXCEL_MAESTRO
 
 
-def auditar_acta(ruta_acta, ruta_maestro):
+def _ejecutar_auditoria(ruta_acta, ruta_maestro):
     """
-    Ejecuta la auditoría completa de un acta y devuelve el
-    texto del informe generado.
+    Ejecuta la auditoría completa de un acta y devuelve TODOS los
+    resultados intermedios en un diccionario (para poder generar
+    tanto el informe de texto como, si hace falta, el correo al
+    profesor, sin repetir cálculos).
     """
 
     if isinstance(ruta_acta, str) and not os.path.exists(ruta_acta):
@@ -121,7 +124,61 @@ def auditar_acta(ruta_acta, ruta_maestro):
         resultado_notas_recu=resultado_notas_recu,
     )
 
-    return informe, asignatura, curso, len(alumnos)
+    return {
+        "informe": informe,
+        "asignatura": asignatura,
+        "curso": curso,
+        "total_alumnos": len(alumnos),
+        "errores_porcentajes": errores_porcentajes,
+        "resultado_notas": resultado_notas,
+        "tiene_dx": tiene_dx,
+        "resultado_notas_dx": resultado_notas_dx,
+        "errores_porcentajes_recu": errores_porcentajes_recu,
+        "resultado_notas_recu": resultado_notas_recu,
+    }
+
+
+def auditar_acta(ruta_acta, ruta_maestro):
+    """
+    Ejecuta la auditoría completa de un acta y devuelve el
+    texto del informe generado (se mantiene esta función tal cual
+    para no romper el código que ya la usa, p.ej. interfaz.py).
+    """
+
+    datos = _ejecutar_auditoria(ruta_acta, ruta_maestro)
+
+    return datos["informe"], datos["asignatura"], datos["curso"], datos["total_alumnos"]
+
+
+def auditar_acta_completo(ruta_acta, ruta_maestro, nombre_profesor=""):
+    """
+    Igual que `auditar_acta`, pero además devuelve, en un diccionario,
+    todos los datos intermedios y el correo (asunto, cuerpo) listo
+    para enviar al profesor si hay algo que corregir.
+
+    Devuelve un diccionario con, entre otras, las claves:
+        informe, asignatura, curso, total_alumnos
+        correo_asunto, correo_cuerpo (None, None si no hay nada que corregir)
+    """
+
+    datos = _ejecutar_auditoria(ruta_acta, ruta_maestro)
+
+    asunto, cuerpo = generar_correo_profesor(
+        asignatura=datos["asignatura"],
+        curso=datos["curso"],
+        errores_porcentajes=datos["errores_porcentajes"],
+        resultado_notas=datos["resultado_notas"],
+        tiene_dx=datos["tiene_dx"],
+        resultado_notas_dx=datos["resultado_notas_dx"],
+        errores_porcentajes_recu=datos["errores_porcentajes_recu"],
+        resultado_notas_recu=datos["resultado_notas_recu"],
+        nombre_profesor=nombre_profesor,
+    )
+
+    datos["correo_asunto"] = asunto
+    datos["correo_cuerpo"] = cuerpo
+
+    return datos
 
 
 def main():

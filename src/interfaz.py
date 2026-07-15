@@ -10,7 +10,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 sys.path.insert(0, BASE_DIR)
 
-from app import auditar_acta
+from app import auditar_acta, auditar_acta_completo
+from correo import generar_correo_profesor
 from config import EXCEL_MAESTRO
 
 ASSETS_DIR = os.path.join(ROOT_DIR, "assets")
@@ -306,9 +307,17 @@ def pagina_auditor():
 
             try:
                 with st.spinner("Auditando acta, un momento..."):
-                    informe, asignatura, curso, total_alumnos = auditar_acta(
-                        archivo_acta, maestro_a_usar
-                    )
+                    datos = auditar_acta_completo(archivo_acta, maestro_a_usar)
+
+                # Guardamos el resultado completo en la sesión para
+                # poder generar el correo sin tener que volver a
+                # subir/auditar el archivo.
+                st.session_state["ultimo_resultado_auditoria"] = datos
+
+                informe = datos["informe"]
+                asignatura = datos["asignatura"]
+                curso = datos["curso"]
+                total_alumnos = datos["total_alumnos"]
 
                 st.success(f"Auditoria completada: {asignatura}")
 
@@ -339,6 +348,56 @@ def pagina_auditor():
                 st.error(f"Error: {error}")
             except Exception as error:
                 st.error(f"Ha ocurrido un error inesperado: {error}")
+
+    # =====================================================
+    # CORREO DE RESPUESTA AL PROFESOR
+    # =====================================================
+    if "ultimo_resultado_auditoria" in st.session_state:
+
+        datos = st.session_state["ultimo_resultado_auditoria"]
+
+        st.divider()
+        st.subheader("✉️ Correo de respuesta al profesor")
+
+        nombre_profesor = st.text_input(
+            "Nombre del profesor (para el saludo del correo, opcional)",
+            key="nombre_profesor_correo",
+        )
+
+        if st.button("Generar correo de respuesta", use_container_width=True):
+
+            asunto, cuerpo = generar_correo_profesor(
+                asignatura=datos["asignatura"],
+                curso=datos["curso"],
+                errores_porcentajes=datos["errores_porcentajes"],
+                resultado_notas=datos["resultado_notas"],
+                tiene_dx=datos["tiene_dx"],
+                resultado_notas_dx=datos["resultado_notas_dx"],
+                errores_porcentajes_recu=datos["errores_porcentajes_recu"],
+                resultado_notas_recu=datos["resultado_notas_recu"],
+                nombre_profesor=nombre_profesor,
+            )
+
+            if cuerpo is None:
+                st.success(
+                    "✅ No se ha encontrado ningún error a corregir: no hace "
+                    "falta enviar correo, el acta está lista."
+                )
+            else:
+                st.text_input("Asunto", value=asunto, key="asunto_correo_generado")
+                st.text_area(
+                    "Cuerpo del correo (cópialo y pégalo en tu cliente de correo)",
+                    value=cuerpo,
+                    height=420,
+                    key="cuerpo_correo_generado",
+                )
+                st.download_button(
+                    "Descargar correo (.txt)",
+                    data=f"Asunto: {asunto}\n\n{cuerpo}",
+                    file_name=f"correo_{datos['asignatura']}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
 
 
 # =====================================================
