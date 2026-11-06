@@ -284,6 +284,24 @@ def _normalizar_clave(nombre):
     # Erratas habituales en el maestro
     clave = clave.replace("PARICAL", "PARCIAL").replace("PARCAIL", "PARCIAL")
 
+    # Abreviaturas y variantes: "P1", "1ER PARCIAL", "PARCIAL I", "EXAMEN"...
+    clave = clave.strip(" .:-")
+    clave = re.sub(r"^(\d)\s*(?:ER|O|º|°)?\s+PARCIAL$", r"PARCIAL \1", clave)
+    clave = re.sub(r"^(?:P|PARCIAL|PARC\.?)\s*(\d)\s*(?:º|°)?$", r"PARCIAL \1", clave)
+    clave = re.sub(r"^PARCIAL\s+II$", "PARCIAL 2", clave)
+    clave = re.sub(r"^PARCIAL\s+I$", "PARCIAL 1", clave)
+
+    alias = {
+        "EXAMEN": "FINAL",
+        "EXAMEN FINAL": "FINAL",
+        "EXAM": "FINAL",
+        "PARTICIPACION ACTIVA": "PA",
+        "PARTICIPACION": "PA",
+        "TRABAJO OBLIGATORIO": "TO",
+        "TREBALL OBLIGATORI": "TO",
+    }
+    clave = alias.get(clave, clave)
+
     if clave == "PARCIAL":
         clave = "PARCIAL 1"
 
@@ -308,6 +326,11 @@ def obtener_porcentajes(fila_maestro):
     texto = str(fila_maestro["PORCENTAJES"])
 
     porcentajes = {}
+
+    # Algunas filas olvidan los dos puntos ("TO 40%"): se añaden
+    texto = re.sub(
+        r"\b(TO|PA|FINAL|EXAMEN|P1|P2)\s+(\d)", r"\1: \2", texto, flags=re.IGNORECASE
+    )
 
     # El símbolo % es opcional: algunas filas del maestro lo olvidan ("FINAL: 60")
     pares = re.findall(r"([^:]+):\s*(\d+(?:[.,]\d+)?)\s*%?", texto)
