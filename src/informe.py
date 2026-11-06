@@ -26,6 +26,9 @@ def generar_informe(
     tiene_dx=False,
     errores_porcentajes_recu=None,
     resultado_notas_recu=None,
+    maestro_usado=None,
+    avisos=None,
+    calculo_omitido=False,
 ):
     """
     Construye el texto del informe final de auditoría.
@@ -44,7 +47,16 @@ def generar_informe(
     lineas.append(f"Asignatura: {asignatura}")
     lineas.append(f"Curso: {curso}")
     lineas.append(f"Total de alumnos detectados: {total_alumnos}")
+
+    if maestro_usado:
+        lineas.append(f"Fila del excel maestro usada: {maestro_usado}")
+
     lineas.append("")
+
+    if avisos:
+        for aviso in avisos:
+            lineas.append(f"⚠️  AVISO: {aviso}")
+        lineas.append("")
 
     # --- Ponderaciones ---
     lineas.append("-" * 60)
@@ -66,6 +78,16 @@ def generar_informe(
 
     lineas.append("")
 
+    if calculo_omitido:
+        lineas.append("-" * 60)
+        lineas.append("2. NOTAS DE LOS ALUMNOS")
+        lineas.append("-" * 60)
+        lineas.append(
+            "ℹ️  No se han auditado las notas de los alumnos en esta asignatura "
+            "(ver el aviso del principio)."
+        )
+        return "\n".join(lineas)
+
     # --- Notas incorrectas ---
     _seccion_lista(
         lineas,
@@ -76,6 +98,16 @@ def generar_informe(
             f"|  SIVAA = {e['Nota SIVAA']}"
         ),
     )
+
+    coherentes = resultado_notas.get("coherentes_con_acta") or []
+
+    if coherentes:
+        lineas.append(
+            f"ℹ️  {'Además, ' if resultado_notas['errores_nota'] else ''}{len(coherentes)} nota(s) no coinciden con los % del excel maestro "
+            "pero SÍ con los % que el profesor ha escrito en el acta. No son errores de "
+            "cálculo: se resuelven al corregir los % de la sección 1."
+        )
+        lineas.append("")
 
     # --- Errores de NP ---
     def _formato_np(e):
@@ -114,8 +146,9 @@ def generar_informe(
         "5. NOTAS NO EVALUABLES AUTOMÁTICAMENTE (revisar a mano)",
         resultado_notas["no_evaluables"],
         lambda e: (
-            f"   ⚠️  {e['Alumno']}: valor original = {e['Valor original']!r}"
-            f"  (SIVAA calcula = {e['Nota SIVAA']})"
+            f"   ⚠️  {e['Alumno']}: {e.get('Motivo') or 'no se ha podido comprobar'}. "
+            f"Nota final del profesor = {e['Valor original']!r}"
+            + (f" (SIVAA calcula {e['Nota SIVAA']})" if e.get("Nota SIVAA") is not None else "")
         ),
         vacio_ok="✅ No hay casos pendientes de revisión manual.",
     )

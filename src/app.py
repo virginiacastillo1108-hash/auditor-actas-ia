@@ -3,26 +3,41 @@ import os
 import sys
 
 from acta import Acta
-from maestro import cargar_maestro, buscar_asignatura, obtener_porcentajes
+from maestro import cargar_maestro, buscar_asignatura, obtener_porcentajes, descripcion_fila
 from auditor import (
+    CONCEPTOS,
     comprobar_porcentajes,
     comprobar_porcentajes_recu,
     auditar_notas,
     auditar_segunda_convocatoria,
     resolver_porcentajes_efectivos,
-    _porcentaje,
+    conceptos_no_soportados,
+    _resultado_vacio,
 )
 from informe import generar_informe, guardar_informe
 from correo import generar_correo_profesor
 from config import EXCEL_MAESTRO
 
 
-def _ejecutar_auditoria(ruta_acta, ruta_maestro):
+# Columnas sin las que no se puede auditar bien (nombre que se enseña al usuario)
+COLUMNAS_IMPORTANTES = {
+    "examen": "examen final",
+    "to": "trabajo obligatorio (TO)",
+    "nota_final": "nota final",
+    "faltas": "faltas",
+}
+
+
+def _ejecutar_auditoria(ruta_acta, ruta_maestro, nombre_archivo=None):
     """
     Ejecuta la auditoría completa de un acta y devuelve TODOS los
     resultados intermedios en un diccionario (para poder generar
     tanto el informe de texto como, si hace falta, el correo al
     profesor, sin repetir cálculos).
+
+    `nombre_archivo` (opcional) ayuda a reconocer al profesor cuando la
+    misma asignatura aparece varias veces en el excel maestro; si no se
+    indica, se saca de la propia ruta o del archivo subido.
     """
 
     if isinstance(ruta_acta, str) and not os.path.exists(ruta_acta):
@@ -31,85 +46,113 @@ def _ejecutar_auditoria(ruta_acta, ruta_maestro):
     if isinstance(ruta_maestro, str) and not os.path.exists(ruta_maestro):
         raise FileNotFoundError(f"No se encuentra el excel maestro: {ruta_maestro}")
 
+    avisos = []
+
     # 1. Leer el acta
-    acta = Acta(ruta_acta)
+    acta = Acta(ruta_acta, nombre_archivo)
     asignatura = acta.obtener_asignatura()
     curso = acta.obtener_curso()
-    ponderaciones_acta = acta.obtener_ponderaciones()
+    pct_acta = acta.obtener_ponderaciones()
     alumnos = acta.obtener_alumnos()
     columnas = acta.columnas
 
-    print(f"Asignatura: {asignatura}")
-    print(f"Curso: {curso}")
-    print(f"Nº de alumnos detectados: {len(alumnos)}\n")
-
-    for concepto, nombre_col in columnas.items():
-        if nombre_col is None:
-            print(f"⚠️  No se ha encontrado la columna para '{concepto}' en el acta.")
+    for concepto, descripcion in COLUMNAS_IMPORTANTES.items():
+        if columnas.get(concepto) is None:
+            avisos.append(
+                f"No se ha encontrado la columna de {descripcion} en el acta: "
+                "los resultados que dependen de ella pueden no ser fiables."
+            )
 
     # 2. Leer el excel maestro y localizar la asignatura
     df_maestro = cargar_maestro(ruta_maestro)
-    fila_maestro, porcentajes_ambiguos = buscar_asignatura(df_maestro, asignatura)
 
-    if fila_maestro is None:
+    busqueda = buscar_asignatura(
+        df_maestro,
+        acta.candidatos_asignatura(),
+        acta.candidatos_curso(),
+        acta.nombre_archivo,
+    )
+
+    if busqueda["fila"] is None:
+        sugerencias = busqueda.get("sugerencias") or []
+        detalle = (
+            " Los nombres más parecidos del maestro son: " + "; ".join(sugerencias) + "."
+            if sugerencias else ""
+        )
         raise ValueError(
-            f"La asignatura '{asignatura}' no se ha encontrado en el excel maestro."
+            f"La asignatura '{asignatura}' no se ha encontrado en el excel maestro.{detalle}"
         )
 
-    if porcentajes_ambiguos:
-        print(
-            f"⚠️  '{asignatura}' aparece varias veces en el excel maestro con "
-            "porcentajes distintos: revisa que se ha cogido el grupo/curso correcto.\n"
+    fila_maestro = busqueda["fila"]
+    maestro_usado = descripcion_fila(fila_maestro)
+
+    if busqueda.get("ambiguo"):
+        avisos.append(
+            "Esta asignatura aparece en el excel maestro con porcentajes distintos para "
+            "otros grupos/cursos. Se ha usado la fila indicada arriba; si no es la "
+            "correcta, revisa estas otras: " + " | ".join(busqueda["alternativas"])
         )
 
     porcentajes_maestro = obtener_porcentajes(fila_maestro)
 
+    if not porcentajes_maestro:
+        raise ValueError(
+            f"No he podido leer los porcentajes de '{maestro_usado}' en el excel maestro."
+        )
+
     # 3. Comprobar que las ponderaciones del acta coinciden con el maestro
-    errores_porcentajes = comprobar_porcentajes(
-        ponderaciones_acta, porcentajes_maestro
-    )
+    errores_porcentajes = comprobar_porcentajes(pct_acta, porcentajes_maestro)
 
-    # 4. Resolver los porcentajes "efectivos" para el cálculo (por si
-    #    el maestro solo da un valor combinado de PA+TO, por ejemplo)
-    porcentajes_efectivos = resolver_porcentajes_efectivos(
-        porcentajes_maestro, ponderaciones_acta
-    )
+    # 4. Porcentajes "efectivos" para el cálculo: los del maestro; si el
+    #    maestro solo da un valor combinado (PA+TO), el reparto lo pone el
+    #    acta. Se guardan también los % tal como están escritos en el acta,
+    #    para distinguir "nota mal calculada" de "% mal puesto".
+    efectivos = resolver_porcentajes_efectivos(porcentajes_maestro, pct_acta)
+    del_acta = {concepto: pct_acta.get(concepto, 0) for concepto in CONCEPTOS}
 
-    # 5. Auditar las notas de cada alumno (tabla principal, 1ª convocatoria)
-    resultado_notas = auditar_notas(alumnos, porcentajes_efectivos, columnas)
+    if acta.to_incluye_pa:
+        for porcentajes in (efectivos, del_acta):
+            porcentajes["TO"] = porcentajes["TO"] + porcentajes["PA"]
+            porcentajes["PA"] = 0
 
-    # 5b. Comprobar % y auditar la 2ª convocatoria (recuperación)
-    errores_porcentajes_recu = comprobar_porcentajes_recu(
-        ponderaciones_acta, porcentajes_efectivos, columnas
-    )
-    resultado_notas_recu = auditar_segunda_convocatoria(
-        alumnos, porcentajes_efectivos, columnas
-    )
+    no_soportados = conceptos_no_soportados(porcentajes_maestro)
+    calculo_omitido = bool(no_soportados)
 
-    # 6. Auditar la sección DX, si existe
-    tiene_dx = acta.tiene_seccion_dx()
-    resultado_notas_dx = None
+    errores_porcentajes_recu = comprobar_porcentajes_recu(pct_acta, efectivos, columnas)
 
-    if tiene_dx:
-        alumnos_dx = acta.obtener_alumnos_dx()
-        if alumnos_dx.empty:
-            resultado_notas_dx = {
-                "errores_nota": [], "errores_np": [], "errores_redondeo": [],
-                "no_evaluables": [], "avisos_asistencia": [], "forzados_a_4": [],
-            }
-        else:
-            ponderaciones_dx = acta.obtener_ponderaciones_dx()
-            # Los porcentajes efectivos de la sección DX son los que
-            # trae la propia acta en esa sección (normalmente solo
-            # FINAL y TO), no los del excel maestro.
-            porcentajes_dx = {
-                "PARCIAL 1": _porcentaje(ponderaciones_dx.get(columnas["parcial1"])),
-                "PARCIAL 2": _porcentaje(ponderaciones_dx.get(columnas["parcial2"])),
-                "FINAL": _porcentaje(ponderaciones_dx.get(columnas["examen"])),
-                "TO": _porcentaje(ponderaciones_dx.get(columnas["to"])),
-                "PA": _porcentaje(ponderaciones_dx.get(columnas["pa"])),
-            }
-            resultado_notas_dx = auditar_notas(alumnos_dx, porcentajes_dx, columnas)
+    if calculo_omitido:
+        avisos.append(
+            "El maestro usa conceptos que SIVAA todavía no sabe calcular ("
+            + ", ".join(no_soportados)
+            + "): se comprueban los porcentajes pero NO se auditan las notas de los alumnos."
+        )
+        resultado_notas = _resultado_vacio()
+        resultado_notas_recu = None
+        resultado_notas_dx = None
+        tiene_dx = False
+
+    else:
+        # 5. Auditar las notas de cada alumno (tabla principal, 1ª convocatoria)
+        alternativos = del_acta if del_acta != efectivos else None
+        resultado_notas = auditar_notas(alumnos, efectivos, columnas, alternativos)
+
+        # 5b. Auditar la 2ª convocatoria (recuperación)
+        resultado_notas_recu = auditar_segunda_convocatoria(alumnos, efectivos, columnas)
+
+        # 6. Auditar la sección DX, si existe
+        tiene_dx = acta.tiene_seccion_dx()
+        resultado_notas_dx = None
+
+        if tiene_dx:
+            alumnos_dx, pct_dx, columnas_dx = acta.obtener_dx()
+
+            if alumnos_dx.empty:
+                resultado_notas_dx = _resultado_vacio()
+            else:
+                # Los % de la sección DX son los que trae la propia acta en esa
+                # sección (normalmente solo FINAL y TO), no los del maestro.
+                porcentajes_dx = {c: pct_dx.get(c, 0) for c in CONCEPTOS}
+                resultado_notas_dx = auditar_notas(alumnos_dx, porcentajes_dx, columnas_dx)
 
     # 7. Generar el informe final
     informe = generar_informe(
@@ -122,6 +165,9 @@ def _ejecutar_auditoria(ruta_acta, ruta_maestro):
         tiene_dx=tiene_dx,
         errores_porcentajes_recu=errores_porcentajes_recu,
         resultado_notas_recu=resultado_notas_recu,
+        maestro_usado=maestro_usado,
+        avisos=avisos,
+        calculo_omitido=calculo_omitido,
     )
 
     return {
@@ -135,22 +181,24 @@ def _ejecutar_auditoria(ruta_acta, ruta_maestro):
         "resultado_notas_dx": resultado_notas_dx,
         "errores_porcentajes_recu": errores_porcentajes_recu,
         "resultado_notas_recu": resultado_notas_recu,
+        "maestro_usado": maestro_usado,
+        "avisos": avisos,
     }
 
 
-def auditar_acta(ruta_acta, ruta_maestro):
+def auditar_acta(ruta_acta, ruta_maestro, nombre_archivo=None):
     """
     Ejecuta la auditoría completa de un acta y devuelve el
     texto del informe generado (se mantiene esta función tal cual
     para no romper el código que ya la usa, p.ej. interfaz.py).
     """
 
-    datos = _ejecutar_auditoria(ruta_acta, ruta_maestro)
+    datos = _ejecutar_auditoria(ruta_acta, ruta_maestro, nombre_archivo)
 
     return datos["informe"], datos["asignatura"], datos["curso"], datos["total_alumnos"]
 
 
-def auditar_acta_completo(ruta_acta, ruta_maestro, nombre_profesor=""):
+def auditar_acta_completo(ruta_acta, ruta_maestro, nombre_profesor="", nombre_archivo=None):
     """
     Igual que `auditar_acta`, pero además devuelve, en un diccionario,
     todos los datos intermedios y el correo (asunto, cuerpo) listo
@@ -161,7 +209,7 @@ def auditar_acta_completo(ruta_acta, ruta_maestro, nombre_profesor=""):
         correo_asunto, correo_cuerpo (None, None si no hay nada que corregir)
     """
 
-    datos = _ejecutar_auditoria(ruta_acta, ruta_maestro)
+    datos = _ejecutar_auditoria(ruta_acta, ruta_maestro, nombre_archivo)
 
     asunto, cuerpo = generar_correo_profesor(
         asignatura=datos["asignatura"],
@@ -188,8 +236,6 @@ def main():
     )
     parser.add_argument(
         "acta",
-        nargs="?",
-        default="data/1_BDM_IT_Applied_to_Marketing_Lilit_DElia.xlsx",
         help="Ruta al Excel del acta a auditar",
     )
     parser.add_argument(

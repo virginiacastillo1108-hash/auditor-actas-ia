@@ -38,6 +38,72 @@ def numero(valor):
     return float(valor)
 
 
+def a_porcentaje_entero(valor):
+    """
+    Convierte la celda de una ponderación a tanto por cien (entero o
+    con decimales). Admite fracciones (0.25 -> 25), puntos de
+    porcentaje (25 -> 25) y texto ("25%" -> 25). Vacío/NaN -> 0.
+    """
+
+    if valor is None:
+        return 0
+
+    if isinstance(valor, str):
+        texto = valor.strip().replace(",", ".").rstrip("%").strip()
+        try:
+            numero_float = float(texto)
+        except ValueError:
+            return 0
+        if valor.strip().endswith("%"):
+            numero_float = round(numero_float, 2)
+            return int(numero_float) if numero_float.is_integer() else numero_float
+    else:
+        try:
+            numero_float = float(valor)
+        except (TypeError, ValueError):
+            return 0
+
+    if math.isnan(numero_float):
+        return 0
+
+    if numero_float <= 1.0001:
+        numero_float *= 100
+
+    numero_float = round(numero_float, 2)
+
+    return int(numero_float) if numero_float.is_integer() else numero_float
+
+
+def leer_faltas(valor):
+    """
+    Devuelve el % de faltas como número (puntos de porcentaje) o None
+    si la celda está vacía o no es un valor válido. Entiende "15.4%",
+    "15,4" y números normales. (Las fracciones con formato % de Excel,
+    p.ej. 0.19 = 19%, las convierte el lector del acta, que es quien
+    conoce el formato de la celda.)
+    """
+
+    if valor is None:
+        return None
+
+    if isinstance(valor, str):
+        texto = valor.strip().replace(",", ".").rstrip("%").strip()
+        try:
+            numero_float = float(texto)
+        except ValueError:
+            return None
+    else:
+        try:
+            numero_float = float(valor)
+        except (TypeError, ValueError):
+            return None
+
+    if math.isnan(numero_float):
+        return None
+
+    return numero_float
+
+
 def es_no_presentado(valor):
     """
     Indica si una celda dice explícitamente "NP" (o variantes como
@@ -221,6 +287,7 @@ def calcular_nota_final(alumno, porcentajes, columnas):
         "motivo_forzado": None,
         "exceso_faltas": False,
         "no_evaluable": False,
+        "motivo_no_evaluable": None,
     }
 
     # --- Regla 1: NP siempre gana ---
@@ -240,7 +307,7 @@ def calcular_nota_final(alumno, porcentajes, columnas):
     pa = numero(valor_pa)
 
     tiene_examen = es_numero(valor_examen)
-    faltas = numero(valor_faltas) if es_numero(valor_faltas) else None
+    faltas = leer_faltas(valor_faltas)
     exceso_faltas = faltas is not None and faltas > UMBRAL_FALTAS
     resultado["exceso_faltas"] = exceso_faltas
 
@@ -251,6 +318,10 @@ def calcular_nota_final(alumno, porcentajes, columnas):
             # si la celda está vacía (no "NP") no podemos calcular
             # nada con garantías: se marca para revisión manual.
             resultado["no_evaluable"] = True
+            resultado["motivo_no_evaluable"] = (
+                "supera el 15% de faltas y no tiene nota en el examen final "
+                "(la celda está vacía, no pone NP)"
+            )
             return resultado
 
         nota = numero(valor_examen) * p_final
@@ -355,6 +426,24 @@ def _comparar(calculo, valor_original):
             "tipo": "no_evaluable",
             "nota_sivaa": calculo["nota"],
             "nota_profesor_original": valor_original,
+            "motivo": "la nota final del profesor no es un número ni NP",
+            "detalle": calculo,
+        }
+
+    # Primero se mira si la nota es la que toca (dando por bueno que el
+    # profesor no la haya redondeado). Solo si lo es, se mira el redondeo:
+    # así una nota MAL calculada nunca se etiqueta como "falta redondear".
+    coincide = math.isclose(
+        calculo["nota"], nota_profesor, abs_tol=0.06
+    ) or math.isclose(
+        calculo["nota"], redondeo_academico(nota_profesor, 1), abs_tol=0.05
+    )
+
+    if not coincide:
+        return {
+            "tipo": "nota_incorrecta",
+            "nota_sivaa": calculo["nota"],
+            "nota_profesor": nota_profesor,
             "detalle": calculo,
         }
 
@@ -366,16 +455,8 @@ def _comparar(calculo, valor_original):
             "detalle": calculo,
         }
 
-    if math.isclose(calculo["nota"], nota_profesor, abs_tol=0.06):
-        return {
-            "tipo": "correcto",
-            "nota_sivaa": calculo["nota"],
-            "nota_profesor": nota_profesor,
-            "detalle": calculo,
-        }
-
     return {
-        "tipo": "nota_incorrecta",
+        "tipo": "correcto",
         "nota_sivaa": calculo["nota"],
         "nota_profesor": nota_profesor,
         "detalle": calculo,
@@ -475,21 +556,47 @@ def calcular_nota_segunda_convocatoria(alumno, porcentajes, columnas):
     p_to = porcentajes.get("TO", 0) / 100
     p_pa = porcentajes.get("PA", 0) / 100
 
+    p1 = porcentajes.get("PARCIAL 1", 0) / 100
+    p2 = porcentajes.get("PARCIAL 2", 0) / 100
+
+    tiene_examen = es_numero(valor_examen)
     examen_num = numero(valor_examen)
     to_num = numero(valor_to)
     pa_num = numero(valor_pa)
 
-    faltas = numero(valor_faltas) if es_numero(valor_faltas) else None
+    faltas = leer_faltas(valor_faltas)
     exceso_faltas = faltas is not None and faltas > UMBRAL_FALTAS
     resultado["exceso_faltas"] = exceso_faltas
 
     if exceso_faltas:
+        if not tiene_examen:
+            resultado["no_evaluable"] = True
+            resultado["motivo_no_evaluable"] = (
+                "supera el 15% de faltas y no tiene nota en el examen final "
+                "(la celda está vacía, no pone NP)"
+            )
+            return resultado
+
         nota = examen_num * p_final
-    else:
+
+    elif tiene_examen:
         nota = examen_num * p_final + to_num * p_to + pa_num * p_pa
 
-    suspenso_examen = examen_num < UMBRAL_SUSPENSO
-    suspenso_to = to_num < UMBRAL_SUSPENSO
+    else:
+        # Sin examen final (evaluación continua): igual que en 1ª
+        # convocatoria, los parciales hacen de examen. Solo se recupera
+        # lo suspendido (p.ej. el TO); los parciales se mantienen.
+        nota = (
+            numero(alumno.get(columnas["parcial1"])) * p1
+            + numero(alumno.get(columnas["parcial2"])) * p2
+            + to_num * p_to
+            + pa_num * p_pa
+        )
+
+    # Solo cuenta como suspenso lo que tiene nota numérica (una celda
+    # vacía no es un suspenso)
+    suspenso_examen = tiene_examen and examen_num < UMBRAL_SUSPENSO
+    suspenso_to = es_numero(valor_to) and to_num < UMBRAL_SUSPENSO
 
     if (suspenso_examen or suspenso_to) and nota > NOTA_FORZADA:
         motivos = []

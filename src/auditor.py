@@ -1,44 +1,37 @@
 import math
 
-from calculadora import comparar_nota, comparar_nota_segunda_convocatoria, esta_vacio
+from calculadora import (
+    a_porcentaje_entero,
+    comparar_nota,
+    comparar_nota_segunda_convocatoria,
+    esta_vacio,
+    redondeo_academico,
+)
 
 
-def _porcentaje(valor):
-    """
-    Convierte una celda de ponderación (fracción 0-1, p.ej. 0.25) a
-    un entero en tanto por cien (25), tratando de forma segura los
-    casos vacíos/NaN (que no son lo mismo que 0, pero para el cálculo
-    de ponderaciones significan "no aplica" -> 0%).
-    """
-
-    if valor is None:
-        return 0
-
-    try:
-        numero = float(valor)
-    except (TypeError, ValueError):
-        return 0
-
-    if math.isnan(numero):
-        return 0
-
-    return round(numero * 100)
+# Se mantiene el nombre antiguo por compatibilidad
+_porcentaje = a_porcentaje_entero
 
 
-# Columnas "conceptuales" del acta y su nombre real en el excel maestro
+# Conceptos "conocidos" del acta y de la columna PORCENTAJES del maestro
 CONCEPTOS = ["PARCIAL 1", "PARCIAL 2", "FINAL", "TO", "PA"]
 
-EQUIVALENCIAS_ACTA = {
-    "PARCIAL 1": "PARCIAL 1",
-    "PARCIAL 2": "PARCIAL 2",
-    "FINAL": "EXAMEN FINAL/1 CONVO",
-    "TO": "TREBALL OBLIGAT",
-    "PA": "PARTICIPA ACTIVA",
-}
 
+def conceptos_no_soportados(porcentajes_maestro):
+    """
+    Devuelve los conceptos del maestro que SIVAA todavía no sabe calcular
+    (por ejemplo "ORAL" o "ESCRIT" en las asignaturas de idiomas). Son los
+    que no son ni uno de los conocidos ni una combinación de ellos ("PA+TO").
+    """
 
-def _valor_directo(porcentajes_maestro, concepto):
-    return porcentajes_maestro.get(concepto)
+    desconocidos = []
+
+    for clave in porcentajes_maestro:
+        partes = clave.split("+")
+        if not all(p in CONCEPTOS for p in partes):
+            desconocidos.append(clave)
+
+    return desconocidos
 
 
 def _buscar_clave_combinada(porcentajes_maestro, concepto):
@@ -55,7 +48,7 @@ def _buscar_clave_combinada(porcentajes_maestro, concepto):
     return None, None
 
 
-def resolver_porcentajes_efectivos(porcentajes_maestro, ponderaciones_acta):
+def resolver_porcentajes_efectivos(porcentajes_maestro, pct_acta):
     """
     Construye el diccionario de porcentajes que se usará para CALCULAR
     la nota de cada alumno (PARCIAL 1, PARCIAL 2, FINAL, TO, PA en
@@ -68,13 +61,15 @@ def resolver_porcentajes_efectivos(porcentajes_maestro, ponderaciones_acta):
     profesor ha puesto en el acta (que es la única fuente que lo
     especifica), y la comprobación de que el TOTAL combinado coincide
     con el maestro se hace aparte, en `comprobar_porcentajes`.
+
+    `pct_acta` son los % del acta por concepto: {"PARCIAL 1": 30, "FINAL": 60, ...}
     """
 
     efectivos = {}
 
     for concepto in CONCEPTOS:
 
-        valor = _valor_directo(porcentajes_maestro, concepto)
+        valor = porcentajes_maestro.get(concepto)
 
         if valor is not None:
             efectivos[concepto] = valor
@@ -83,16 +78,14 @@ def resolver_porcentajes_efectivos(porcentajes_maestro, ponderaciones_acta):
         clave_combinada, _ = _buscar_clave_combinada(porcentajes_maestro, concepto)
 
         if clave_combinada is not None:
-            columna_acta = EQUIVALENCIAS_ACTA[concepto]
-            valor_acta = ponderaciones_acta.get(columna_acta, 0)
-            efectivos[concepto] = _porcentaje(valor_acta)
+            efectivos[concepto] = pct_acta.get(concepto, 0)
         else:
             efectivos[concepto] = 0
 
     return efectivos
 
 
-def comprobar_porcentajes(ponderaciones_acta, porcentajes_maestro):
+def comprobar_porcentajes(pct_acta, porcentajes_maestro):
     """
     Compara los % puestos en el acta contra los del excel maestro
     (o la guía docente). Soporta que el maestro dé los porcentajes de
@@ -110,11 +103,9 @@ def comprobar_porcentajes(ponderaciones_acta, porcentajes_maestro):
         if concepto in ya_comprobados:
             continue
 
-        columna_acta = EQUIVALENCIAS_ACTA[concepto]
-        valor_acta = ponderaciones_acta.get(columna_acta, 0)
-        valor_acta = _porcentaje(valor_acta)
+        valor_acta = pct_acta.get(concepto, 0)
 
-        valor_directo = _valor_directo(porcentajes_maestro, concepto)
+        valor_directo = porcentajes_maestro.get(concepto)
 
         if valor_directo is not None:
             if valor_directo != valor_acta:
@@ -130,13 +121,10 @@ def comprobar_porcentajes(ponderaciones_acta, porcentajes_maestro):
         )
 
         if clave_combinada is not None:
-            conceptos_combinados = clave_combinada.split("+")
             suma_acta = 0
-            for c in conceptos_combinados:
-                col = EQUIVALENCIAS_ACTA.get(c)
-                if col:
-                    suma_acta += _porcentaje(ponderaciones_acta.get(col))
-                    ya_comprobados.add(c)
+            for c in clave_combinada.split("+"):
+                suma_acta += pct_acta.get(c, 0)
+                ya_comprobados.add(c)
 
             if suma_acta != valor_combinado:
                 errores.append({
@@ -157,7 +145,7 @@ def comprobar_porcentajes(ponderaciones_acta, porcentajes_maestro):
     return errores
 
 
-def comprobar_porcentajes_recu(ponderaciones_acta, porcentajes_efectivos, columnas):
+def comprobar_porcentajes_recu(pct_acta, porcentajes_efectivos, columnas):
     """
     Comprueba que los % de la 2ª convocatoria (columnas "EXAMEN RECU"
     y "TREBALL RECU") sean los MISMOS que los de evaluación continua
@@ -166,11 +154,8 @@ def comprobar_porcentajes_recu(ponderaciones_acta, porcentajes_efectivos, column
 
     errores = []
 
-    columna_examen_recu = columnas.get("examen_recu")
-    columna_to_recu = columnas.get("to_recu")
-
-    if columna_examen_recu:
-        valor_acta = _porcentaje(ponderaciones_acta.get(columna_examen_recu))
+    if columnas.get("examen_recu"):
+        valor_acta = pct_acta.get("EXAMEN RECU", 0)
         esperado = porcentajes_efectivos.get("FINAL", 0)
         if valor_acta != esperado:
             errores.append({
@@ -179,8 +164,8 @@ def comprobar_porcentajes_recu(ponderaciones_acta, porcentajes_efectivos, column
                 "acta": valor_acta,
             })
 
-    if columna_to_recu:
-        valor_acta = _porcentaje(ponderaciones_acta.get(columna_to_recu))
+    if columnas.get("to_recu"):
+        valor_acta = pct_acta.get("TREBALL RECU", 0)
         esperado = porcentajes_efectivos.get("TO", 0)
         if valor_acta != esperado:
             errores.append({
@@ -193,6 +178,11 @@ def comprobar_porcentajes_recu(ponderaciones_acta, porcentajes_efectivos, column
 
 
 def _nombre_alumno(alumno):
+    """
+    Nombre del alumno + su fila en el Excel. La fila es necesaria porque
+    muchas actas solo traen el nombre de pila y puede haber dos "Jan"; con
+    la fila el profesor sabe exactamente a quién nos referimos.
+    """
 
     nombre = str(alumno.get("NOMBRE", "")).strip()
     apellidos = str(alumno.get("APELLIDOS", "")).strip()
@@ -202,10 +192,33 @@ def _nombre_alumno(alumno):
     if nombre.lower() == "nan":
         nombre = ""
 
-    return f"{apellidos} {nombre}".strip()
+    texto = f"{apellidos} {nombre}".strip()
+
+    if not texto:
+        return ""
+
+    fila = alumno.get("__fila")
+
+    if fila is not None and not (isinstance(fila, float) and math.isnan(fila)):
+        texto += f" (fila {int(fila)})"
+
+    return texto
 
 
-def auditar_notas(df_alumnos, porcentajes_efectivos, columnas):
+def _resultado_vacio():
+
+    return {
+        "errores_nota": [],
+        "errores_np": [],
+        "errores_redondeo": [],
+        "no_evaluables": [],
+        "avisos_asistencia": [],
+        "forzados_a_4": [],
+        "coherentes_con_acta": [],
+    }
+
+
+def auditar_notas(df_alumnos, porcentajes_efectivos, columnas, porcentajes_alternativos=None):
     """
     Recorre a los alumnos y compara la nota calculada por SIVAA con
     la nota puesta por el profesor, aplicando todas las reglas
@@ -220,16 +233,17 @@ def auditar_notas(df_alumnos, porcentajes_efectivos, columnas):
         no_evaluables          -> no se ha podido comprobar con garantías
         avisos_asistencia      -> alumnos con +15% de faltas (informativo)
         forzados_a_4            -> alumnos a los que se les ha forzado la nota a 4 (informativo)
+        coherentes_con_acta     -> la nota no coincide con los % OFICIALES pero sí
+                                   con los % que el profesor escribió en el acta.
+                                   Es consecuencia de un % mal puesto (que ya se
+                                   avisa en la sección de ponderaciones), no un
+                                   error de cálculo del profesor.
+
+    `porcentajes_alternativos` son los % escritos en el acta (con la misma forma
+    que `porcentajes_efectivos`); si se pasan, se usan para distinguir ese caso.
     """
 
-    resultado = {
-        "errores_nota": [],
-        "errores_np": [],
-        "errores_redondeo": [],
-        "no_evaluables": [],
-        "avisos_asistencia": [],
-        "forzados_a_4": [],
-    }
+    resultado = _resultado_vacio()
 
     for _, alumno in df_alumnos.iterrows():
 
@@ -258,11 +272,33 @@ def auditar_notas(df_alumnos, porcentajes_efectivos, columnas):
         if tipo == "correcto":
             continue
 
+        if tipo == "nota_incorrecta" and porcentajes_alternativos:
+
+            alternativa = comparar_nota(alumno, porcentajes_alternativos, columnas)
+
+            if alternativa["tipo"] in ("correcto", "redondeo"):
+
+                resultado["coherentes_con_acta"].append({
+                    "Alumno": nombre_completo,
+                    "Nota profesor": comparacion.get("nota_profesor"),
+                    "Nota SIVAA": comparacion.get("nota_sivaa"),
+                })
+
+                if alternativa["tipo"] == "redondeo":
+                    resultado["errores_redondeo"].append({
+                        "Alumno": nombre_completo,
+                        "Nota profesor": alternativa.get("nota_profesor"),
+                        "Nota SIVAA": redondeo_academico(alternativa.get("nota_profesor")),
+                    })
+
+                continue
+
         if tipo == "no_evaluable":
             resultado["no_evaluables"].append({
                 "Alumno": nombre_completo,
                 "Valor original": comparacion.get("nota_profesor_original"),
                 "Nota SIVAA": comparacion.get("nota_sivaa"),
+                "Motivo": detalle.get("motivo_no_evaluable") or comparacion.get("motivo"),
             })
 
         elif tipo in ("np_incumplida", "np_injustificada"):
@@ -330,16 +366,9 @@ def auditar_segunda_convocatoria(df_alumnos, porcentajes_efectivos, columnas):
             todavía), en cuyo caso no se marca nada como falta.
     """
 
-    resultado = {
-        "errores_nota": [],
-        "errores_np": [],
-        "errores_redondeo": [],
-        "no_evaluables": [],
-        "avisos_asistencia": [],
-        "forzados_a_4": [],
-        "faltan_recu": [],
-        "acta_solo_1a_convocatoria": False,
-    }
+    resultado = _resultado_vacio()
+    resultado["faltan_recu"] = []
+    resultado["acta_solo_1a_convocatoria"] = False
 
     if not columnas.get("examen_recu") and not columnas.get("to_recu"):
         # El acta no tiene columnas de 2ª convocatoria: no se audita.
@@ -399,6 +428,7 @@ def auditar_segunda_convocatoria(df_alumnos, porcentajes_efectivos, columnas):
                 "Alumno": nombre_completo,
                 "Valor original": comparacion.get("nota_profesor_original"),
                 "Nota SIVAA": comparacion.get("nota_sivaa"),
+                "Motivo": detalle.get("motivo_no_evaluable") or comparacion.get("motivo"),
             })
 
         elif tipo in ("np_incumplida", "np_injustificada"):
